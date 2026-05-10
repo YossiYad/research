@@ -1,7 +1,7 @@
 # קבצי אודיו לא נכנסים ל-git (גדולים מדי + פרטיים)
-dataset/raw/**/*
-dataset/processed/**/*
-dataset/metadata.csv
+#dataset/raw/**/*
+#dataset/processed/**/*
+#dataset/metadata.csv
 
 # שמירה על מבנה תיקיות
 !dataset/raw/**/.gitkeep
