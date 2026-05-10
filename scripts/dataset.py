@@ -84,6 +84,9 @@ class AudioDataset(Dataset):
     מאגר אודיו ל-PyTorch.
 
     כל פריט: (waveform, label_idx) — צמד של טנזור אודיו ותווית מספרית.
+
+    Args:
+        augmentor: אובייקט augmentation (למשל AudioAugmentor). מועבר רק ל-train.
     """
 
     def __init__(
@@ -92,11 +95,13 @@ class AudioDataset(Dataset):
         processed_dir: Path,
         sample_rate: int = 16000,
         normalize: bool = True,
+        augmentor=None,
     ) -> None:
         self.records = records
         self.processed_dir = Path(processed_dir)
         self.sample_rate = sample_rate
         self.normalize = normalize
+        self.augmentor = augmentor
 
     def __len__(self) -> int:
         return len(self.records)
@@ -106,11 +111,40 @@ class AudioDataset(Dataset):
         wav_path = self.processed_dir / rec["class"] / rec["clip_id"]
         audio, _ = librosa.load(str(wav_path), sr=self.sample_rate, mono=True)
 
+        # augmentations (רק בזמן אימון)
+        if self.augmentor is not None:
+            audio = self.augmentor(audio)
+
         # נורמליזציה (חובה ל-wav2vec2 — מצפה לקלט עם ממוצע 0 וסטיית תקן 1)
         if self.normalize:
             audio = (audio - audio.mean()) / (audio.std() + 1e-7)
 
         return torch.from_numpy(audio).float(), CLASS_TO_IDX[rec["class"]]
+
+
+def collate_fn(
+    batch: list[tuple[torch.Tensor, int]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Collate עם padding — מיישר את כל החתיכות באורך הארוך ביותר ב-batch.
+
+    wav2vec2 מצפה ל-attention_mask כדי להתעלם מאזורי ה-padding.
+
+    Returns:
+        (padded_waveforms, attention_mask, labels)
+    """
+    waveforms, labels = zip(*batch)
+    max_len = max(w.shape[0] for w in waveforms)
+
+    padded = torch.zeros(len(waveforms), max_len)
+    mask = torch.zeros(len(waveforms), max_len, dtype=torch.long)
+
+    for i, w in enumerate(waveforms):
+        length = w.shape[0]
+        padded[i, :length] = w
+        mask[i, :length] = 1
+
+    return padded, mask, torch.tensor(labels, dtype=torch.long)
 
 
 def class_distribution(records: list[dict]) -> dict[str, int]:

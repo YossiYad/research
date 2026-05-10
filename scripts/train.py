@@ -32,9 +32,11 @@ from dataset import (
     CLASSES,
     AudioDataset,
     class_distribution,
+    collate_fn,
     load_metadata,
     split_by_source,
 )
+from augment import AudioAugmentor
 from model import AudioClassifier
 
 
@@ -48,10 +50,11 @@ def evaluate(
     all_labels: list[int] = []
     all_preds: list[int] = []
     with torch.no_grad():
-        for audio, labels in loader:
+        for audio, mask, labels in loader:
             audio = audio.to(device)
+            mask = mask.to(device)
             labels = labels.to(device)
-            logits = model(audio)
+            logits = model(audio, attention_mask=mask)
             preds = logits.argmax(dim=1)
             all_labels.extend(labels.cpu().tolist())
             all_preds.extend(preds.cpu().tolist())
@@ -85,6 +88,8 @@ def main() -> None:
     parser.add_argument("--no-freeze-encoder", dest="freeze_encoder",
                         action="store_false")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--patience", type=int, default=5,
+                        help="מספר אפוקים ללא שיפור לפני עצירה מוקדמת")
     parser.add_argument("--num-workers", type=int, default=2,
                         help="מספר תהליכי טעינת נתונים")
     args = parser.parse_args()
@@ -122,16 +127,20 @@ def main() -> None:
         print("\nשגיאה: אחד הפיצולים ריק. צריך לפחות 3 קובצי מקור לכל קטגוריה.")
         sys.exit(1)
 
-    train_ds = AudioDataset(train_recs, args.data_dir)
+    augmentor = AudioAugmentor(p=0.5)
+    train_ds = AudioDataset(train_recs, args.data_dir, augmentor=augmentor)
     val_ds = AudioDataset(val_recs, args.data_dir)
     test_ds = AudioDataset(test_recs, args.data_dir)
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=(device == "cuda"))
+                              num_workers=args.num_workers, pin_memory=(device == "cuda"),
+                              collate_fn=collate_fn)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size,
-                            num_workers=args.num_workers, pin_memory=(device == "cuda"))
+                            num_workers=args.num_workers, pin_memory=(device == "cuda"),
+                            collate_fn=collate_fn)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size,
-                             num_workers=args.num_workers, pin_memory=(device == "cuda"))
+                             num_workers=args.num_workers, pin_memory=(device == "cuda"),
+                             collate_fn=collate_fn)
 
     # ── בניית המודל ──────────────────────────────────────────
     print(f"\nטוען מודל בסיס: {args.base_model}")
@@ -151,10 +160,20 @@ def main() -> None:
         weight_decay=0.01,
     )
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
-    criterion = nn.CrossEntropyLoss()
+
+    # class weights — מפצה על חוסר איזון בין הקטגוריות
+    train_dist = class_distribution(train_recs)
+    weights = torch.tensor(
+        [1.0 / max(1, train_dist.get(c, 1)) for c in CLASSES],
+        dtype=torch.float,
+    )
+    weights = weights / weights.sum() * len(CLASSES)  # נרמול כך שהממוצע = 1
+    print(f"\nclass weights: {dict(zip(CLASSES, weights.tolist()))}")
+    criterion = nn.CrossEntropyLoss(weight=weights.to(device))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     best_val_acc = 0.0
+    epochs_without_improvement = 0
     history: list[dict] = []
 
     # ── לולאת אימון ─────────────────────────────────────────
@@ -163,11 +182,12 @@ def main() -> None:
         model.train()
         total_loss = 0.0
         n_batches = 0
-        for audio, labels in train_loader:
+        for audio, mask, labels in train_loader:
             audio = audio.to(device)
+            mask = mask.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
-            logits = model(audio)
+            logits = model(audio, attention_mask=mask)
             loss = criterion(logits, labels)
             loss.backward()
             optimizer.step()
@@ -186,8 +206,14 @@ def main() -> None:
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), args.output_dir / "best.pt")
             print(f"    ✓ נשמר best.pt (דיוק חדש: {val_acc:.4f})")
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= args.patience:
+                print(f"\n⏹ עצירה מוקדמת — אין שיפור כבר {args.patience} אפוקים.")
+                break
 
     torch.save(model.state_dict(), args.output_dir / "last.pt")
     with (args.output_dir / "history.json").open("w", encoding="utf-8") as fh:
