@@ -66,13 +66,22 @@ audio-classifier/
 ### שלב 2 — חיתוך לחתיכות של 5 שניות
 
 ```bash
-python scripts/chop_audio.py --input dataset/raw/human --class human
-python scripts/chop_audio.py --input dataset/raw/ivr --class ivr
-python scripts/chop_audio.py --input dataset/raw/music --class music
-python scripts/chop_audio.py --input dataset/raw/recording --class recording
+python scripts/chop_audio.py --input dataset/raw/human --class human --language he
+python scripts/chop_audio.py --input dataset/raw/ivr --class ivr --language he
+python scripts/chop_audio.py --input dataset/raw/music --class music --language n/a
+python scripts/chop_audio.py --input dataset/raw/recording --class recording --language he
 ```
 
 הסקריפט יחתוך כל קובץ לחתיכות של 5 שניות עם חפיפה של 2.5 שניות, ידלג על חתיכות שקטות, ויעדכן את `metadata.csv`.
+
+**תמיכה במספר שפות:** הדגל `--language` מקבל קוד ISO 639-1 (למשל `he`, `en`, `ar`, `ru`) ונרשם ב-`metadata.csv` עבור כל חתיכה. ברירת המחדל היא `unknown`, ולמוזיקה אפשר להשתמש ב-`n/a`. הריצו את הסקריפט פעם נפרדת לכל שפה כדי שהתיוג יהיה מדויק:
+
+```bash
+python scripts/chop_audio.py --input dataset/raw/human/he --class human --language he
+python scripts/chop_audio.py --input dataset/raw/human/en --class human --language en
+```
+
+זה יאפשר ניתוח ביצועי המודל פר-שפה בלי לאמן מחדש, ולשמור על התפלגות שפות דומה בין train ל-eval.
 
 ### שלב 3 — אימון
 
