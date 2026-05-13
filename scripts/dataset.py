@@ -34,39 +34,57 @@ def split_by_source(
     seed: int = 42,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """
-    מחלק את המאגר ל-train/val/test לפי קובץ מקור.
+    מחלק את המאגר ל-train/val/test לפי קובץ מקור, עם stratification
+    כפול על (class, language).
 
     כל החתיכות שנחתכו מאותו קובץ מקור ילכו לאותו פיצול. זה מונע
     דליפת מידע (data leakage) — מצב שבו המודל "מכיר" את ההקלטה
     מאימון וזוכה לציון מנופח על אותה הקלטה ב-test.
+
+    כשמאמנים על מספר שפות, הפיצול נעשה בנפרד לכל (class, language)
+    כך שגם train, גם val וגם test מכילים ייצוג מכל שפה. אחרת,
+    שפה עם מעט הקלטות הייתה נעלמת לחלוטין מ-val/test ולא היינו
+    יכולים למדוד ביצועים עליה.
 
     Returns:
         (train_records, val_records, test_records)
     """
     rng = random.Random(seed)
 
-    # קיבוץ לפי (קטגוריה, קובץ מקור)
-    by_source: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    by_source: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for rec in metadata:
-        by_source[(rec["class"], rec["source_file"])].append(rec)
+        lang = rec.get("language", "unknown") or "unknown"
+        by_source[(rec["class"], lang, rec["source_file"])].append(rec)
 
-    # קיבוץ של קובצי מקור לפי קטגוריה
-    sources_by_class: dict[str, list[tuple[str, list[dict]]]] = defaultdict(list)
-    for (cls, src), recs in by_source.items():
-        sources_by_class[cls].append((src, recs))
+    # קיבוץ קובצי מקור לפי הצמד (קטגוריה, שפה) — זה ה-stratum
+    sources_by_stratum: dict[tuple[str, str], list[tuple[str, list[dict]]]] = defaultdict(list)
+    for (cls, lang, src), recs in by_source.items():
+        sources_by_stratum[(cls, lang)].append((src, recs))
 
     train: list[dict] = []
     val: list[dict] = []
     test: list[dict] = []
 
-    for cls in CLASSES:
-        sources = sources_by_class.get(cls, [])
+    for (cls, lang), sources in sorted(sources_by_stratum.items()):
         rng.shuffle(sources)
         n = len(sources)
         if n == 0:
             continue
-        n_test = max(1, int(n * test_ratio))
-        n_val = max(1, int(n * val_ratio))
+        if n < 3:
+            # פחות מ-3 הקלטות מקור ב-stratum — אי אפשר לפצל ל-train/val/test
+            # בלי שאחד מהם יישאר ריק. כל ההקלטות הולכות ל-train, ואנחנו
+            # מזהירים את המשתמש שהקטגוריה+שפה הזו לא תיבדק.
+            print(f"  ⚠ ({cls}, {lang}): רק {n} הקלטות מקור — כולן ל-train (לא ייבדק val/test לשפה הזו)")
+            for _, recs in sources:
+                train.extend(recs)
+            continue
+
+        n_test = max(1, int(round(n * test_ratio)))
+        n_val = max(1, int(round(n * val_ratio)))
+        # ודא שנשאר משהו ל-train
+        if n_test + n_val >= n:
+            n_test = 1
+            n_val = 1
 
         for i, (_, recs) in enumerate(sources):
             if i < n_test:
@@ -152,4 +170,22 @@ def class_distribution(records: list[dict]) -> dict[str, int]:
     counts: dict[str, int] = defaultdict(int)
     for r in records:
         counts[r["class"]] += 1
+    return dict(counts)
+
+
+def language_distribution(records: list[dict]) -> dict[str, int]:
+    """מחזיר ספירה של דוגמאות לכל שפה."""
+    counts: dict[str, int] = defaultdict(int)
+    for r in records:
+        lang = r.get("language", "unknown") or "unknown"
+        counts[lang] += 1
+    return dict(counts)
+
+
+def class_language_distribution(records: list[dict]) -> dict[tuple[str, str], int]:
+    """מחזיר ספירה לפי הצמד (קטגוריה, שפה)."""
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    for r in records:
+        lang = r.get("language", "unknown") or "unknown"
+        counts[(r["class"], lang)] += 1
     return dict(counts)

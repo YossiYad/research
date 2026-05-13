@@ -32,7 +32,9 @@ from dataset import (
     CLASSES,
     AudioDataset,
     class_distribution,
+    class_language_distribution,
     collate_fn,
+    language_distribution,
     load_metadata,
     split_by_source,
 )
@@ -122,6 +124,14 @@ def main() -> None:
     print("התפלגות אימון:", class_distribution(train_recs))
     print("התפלגות אימות:", class_distribution(val_recs))
     print("התפלגות בדיקה:", class_distribution(test_recs))
+
+    all_langs = language_distribution(metadata)
+    if len(all_langs) > 1 or next(iter(all_langs), "unknown") != "unknown":
+        print(f"\nשפות במאגר: {all_langs}")
+        print("התפלגות שפה באימון:", language_distribution(train_recs))
+        print("התפלגות שפה באימות:", language_distribution(val_recs))
+        print("התפלגות שפה בבדיקה:", language_distribution(test_recs))
+        print("פירוט (קטגוריה, שפה) בבדיקה:", class_language_distribution(test_recs))
 
     if not train_recs or not val_recs or not test_recs:
         print("\nשגיאה: אחד הפיצולים ריק. צריך לפחות 3 קובצי מקור לכל קטגוריה.")
@@ -237,6 +247,20 @@ def main() -> None:
     print(header)
     for cls, row in zip(CLASSES, cm):
         print(f"{cls:>10}  " + "  ".join(f"{v:>10}" for v in row))
+
+    # ── דיוק פר-שפה ─────────────────────────────────────────
+    # ה-test_loader רץ בלי shuffle, ולכן y_pred[i] תואם את test_recs[i].
+    test_langs = sorted(language_distribution(test_recs))
+    if len(test_langs) > 1 or test_langs != ["unknown"]:
+        per_lang_acc: dict[str, tuple[int, int]] = {}
+        for rec, t, p in zip(test_recs, y_true, y_pred):
+            lang = rec.get("language", "unknown") or "unknown"
+            correct, total = per_lang_acc.get(lang, (0, 0))
+            per_lang_acc[lang] = (correct + int(t == p), total + 1)
+        print("\nדיוק על קבוצת הבדיקה פר שפה:")
+        for lang in sorted(per_lang_acc):
+            correct, total = per_lang_acc[lang]
+            print(f"  {lang:>8}: {correct}/{total} = {correct / max(1, total):.4f}")
 
 
 if __name__ == "__main__":

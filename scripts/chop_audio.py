@@ -5,10 +5,11 @@
 פלט: קבצי WAV של 5 שניות, 16 קילוהרץ, ערוץ אחד (מונו), 16 ביט PCM.
 
 שימוש:
-    python chop_audio.py --input <קובץ_או_תיקיה> --class <human|ivr|music|recording>
+    python chop_audio.py --input <קובץ_או_תיקיה> --class <human|ivr|music|recording> [--language <קוד>]
 
 דוגמה:
-    python chop_audio.py --input dataset/raw/human --class human
+    python chop_audio.py --input dataset/raw/human --class human --language he
+    python chop_audio.py --input dataset/raw/music --class music   # ברירת מחדל: unknown
 """
 import argparse
 import csv
@@ -26,6 +27,7 @@ CLIP_DURATION_SEC = 5.0        # אורך כל חתיכה: 5 שניות
 HOP_DURATION_SEC = 2.5         # קפיצה: 2.5 שניות (חפיפה של 50%)
 SILENCE_THRESHOLD_DB = -45     # סף שתיקה — חתיכות שקטות יותר ידולגו
 VALID_CLASSES = ["human", "ivr", "music", "recording"]
+DEFAULT_LANGUAGE = "unknown"   # קוד ISO 639-1 (he, en, ar, ru, ...) או "unknown" / "n/a"
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".webm", ".opus"}
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,7 @@ def is_silent(clip: np.ndarray) -> bool:
     return db < SILENCE_THRESHOLD_DB
 
 
-def chop_file(input_path: Path, output_dir: Path, class_name: str) -> list[dict]:
+def chop_file(input_path: Path, output_dir: Path, class_name: str, language: str) -> list[dict]:
     """
     חותך קובץ אודיו אחד לחתיכות של 5 שניות.
     מחזיר רשימת רשומות לכתיבה ל-metadata.csv.
@@ -85,6 +87,7 @@ def chop_file(input_path: Path, output_dir: Path, class_name: str) -> list[dict]
             "start_sec": round(start / TARGET_SR, 3),
             "duration_sec": CLIP_DURATION_SEC,
             "class": class_name,
+            "language": language,
         })
         chunk_idx += 1
         saved += 1
@@ -105,15 +108,38 @@ def find_audio_files(input_path: Path) -> list[Path]:
     )
 
 
+FIELDNAMES = ["clip_id", "source_file", "start_sec", "duration_sec", "class", "language"]
+
+
+def _migrate_legacy_metadata(metadata_path: Path) -> None:
+    """אם metadata.csv קיים בלי עמודת language — מוסיף אותה עם הערך unknown."""
+    with metadata_path.open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        header = reader.fieldnames or []
+        if "language" in header:
+            return
+        rows = list(reader)
+    logger.info(f"מעדכן {metadata_path.name}: מוסיף עמודת language={DEFAULT_LANGUAGE} ל-{len(rows)} שורות קיימות")
+    with metadata_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        for row in rows:
+            row.setdefault("language", DEFAULT_LANGUAGE)
+            writer.writerow(row)
+
+
 def append_metadata(metadata_path: Path, records: list[dict]) -> None:
     """מוסיף רשומות חדשות ל-metadata.csv (יוצר את הקובץ אם לא קיים)."""
     if not records:
         return
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not metadata_path.exists()
-    fieldnames = ["clip_id", "source_file", "start_sec", "duration_sec", "class"]
+    if metadata_path.exists():
+        _migrate_legacy_metadata(metadata_path)
+        write_header = False
+    else:
+        write_header = True
     with metadata_path.open("a", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer = csv.DictWriter(fh, fieldnames=FIELDNAMES)
         if write_header:
             writer.writeheader()
         writer.writerows(records)
@@ -125,6 +151,9 @@ def main() -> None:
                         help="קובץ אודיו או תיקיה עם קבצי אודיו")
     parser.add_argument("--class", dest="class_name", choices=VALID_CLASSES, required=True,
                         help="הקטגוריה של האודיו")
+    parser.add_argument("--language", default=DEFAULT_LANGUAGE,
+                        help="קוד שפה ISO 639-1 (he, en, ar, ru, ...). "
+                             "ברירת מחדל: unknown. למוזיקה אפשר להשתמש ב-n/a.")
     default_processed = Path(__file__).resolve().parent.parent / "dataset" / "processed"
     parser.add_argument("--output-root", type=Path, default=default_processed,
                         help="תיקית פלט (ברירת מחדל: dataset/processed)")
@@ -142,13 +171,13 @@ def main() -> None:
         logger.error(f"שגיאה: לא נמצאו קבצי אודיו ב-{args.input}")
         sys.exit(1)
 
-    logger.info(f"נמצאו {len(files)} קבצי אודיו, מחתך לקטגוריה '{args.class_name}'")
+    logger.info(f"נמצאו {len(files)} קבצי אודיו, מחתך לקטגוריה '{args.class_name}' (שפה: {args.language})")
     logger.info(f"פלט: {output_dir}")
     logger.info("")
 
     all_records: list[dict] = []
     for f in files:
-        all_records.extend(chop_file(f, output_dir, args.class_name))
+        all_records.extend(chop_file(f, output_dir, args.class_name, args.language))
 
     metadata_path = args.output_root.parent / "metadata.csv"
     append_metadata(metadata_path, all_records)
