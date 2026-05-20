@@ -9,6 +9,12 @@ import librosa
 
 NUM_BREATH_FEATURES = 5
 
+# סקלות נירמול לכל פיצ'ר — מיועדות להביא את כל הפיצ'רים לטווח דומה
+# (~[0, 2]) כדי שלא ידחקו את הפיצ'רים האקוסטיים של wav2vec2 בשכבת הסיווג.
+# בלי הנירמול הזה, snr_db (עד ~50) גרם לגרדיאנטים פי 50 גדולים יותר
+# מאשר breath_ratio (0-1), והאופטימיזציה נשברה.
+_BREATH_NORM_SCALES = np.array([10.0, 1.0, 1.0, 10.0, 30.0], dtype=np.float32)
+
 
 def extract_breath_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     """
@@ -104,7 +110,8 @@ def extract_breath_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     else:
         snr_db = 0.0
 
-    return np.array(
+    features = np.array(
         [breath_count, breath_ratio, mean_breath_flatness, breath_energy_contrast, snr_db],
         dtype=np.float32,
     )
+    return features / _BREATH_NORM_SCALES
