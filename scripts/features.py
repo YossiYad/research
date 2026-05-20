@@ -50,8 +50,10 @@ def extract_breath_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     # סף אנרגיה — נשימה מתחת לחציון (לא דיבור/מוזיקה)
     energy_median = np.median(rms)
 
-    # סף flatness — נשימה היא רעשית, flatness גבוה
-    flatness_threshold = np.median(flatness)
+    # סף flatness מוחלט — נשימה היא רעש רחב-פס (flatness >= 0.3).
+    # חציון לא מתאים פה: בקליפ של מוזיקה טהורה החציון נמוך,
+    # אז ~25% מהפריימים היו מסומנים כ"נשימה" למרות שאין נשימה.
+    flatness_threshold = 0.3
 
     # פריים = נשימה אם: אנרגיה נמוכה + flatness גבוה + לא שתיקה
     breath_mask = (

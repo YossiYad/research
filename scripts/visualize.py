@@ -16,6 +16,7 @@ from sklearn.metrics import ConfusionMatrixDisplay, classification_report, confu
 
 sys.path.insert(0, str(Path(__file__).parent))
 from dataset import CLASSES, AudioDataset, collate_fn, load_metadata, split_by_source
+from features import NUM_BREATH_FEATURES
 from model import AudioClassifier
 
 try:
@@ -196,7 +197,10 @@ def main() -> None:
 
     # ── הרצת המודל על קבוצת הבדיקה ─────────────────────────
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AudioClassifier(num_classes=len(CLASSES)).to(device)
+    model = AudioClassifier(
+        num_classes=len(CLASSES),
+        aux_features_dim=NUM_BREATH_FEATURES,
+    ).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -206,10 +210,11 @@ def main() -> None:
 
     y_true, y_pred = [], []
     with torch.no_grad():
-        for audio, mask, labels in test_loader:
+        for audio, mask, breath_feats, labels in test_loader:
             audio = audio.to(device)
             mask = mask.to(device)
-            preds = model(audio, attention_mask=mask).argmax(dim=1)
+            breath_feats = breath_feats.to(device)
+            preds = model(audio, attention_mask=mask, aux_features=breath_feats).argmax(dim=1)
             y_true.extend(labels.tolist())
             y_pred.extend(preds.cpu().tolist())
 

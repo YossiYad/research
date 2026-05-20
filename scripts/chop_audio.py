@@ -23,8 +23,9 @@ import soundfile as sf
 
 # ── הגדרות ────────────────────────────────────────────────────
 TARGET_SR = 16000              # קצב דגימה: 16 קילוהרץ
-CLIP_DURATION_SEC = 5.0        # אורך כל חתיכה: 5 שניות
+CLIP_DURATION_SEC = 5.0        # אורך כל חתיכה ארוכה: 5 שניות
 HOP_DURATION_SEC = 2.5         # קפיצה: 2.5 שניות (חפיפה של 50%)
+MIN_DURATION_SEC = 0.3         # אורך מינימלי שיישמר (קצר מזה הוא רעש/קליק)
 SILENCE_THRESHOLD_DB = -45     # סף שתיקה — חתיכות שקטות יותר ידולגו
 VALID_CLASSES = ["human", "ivr", "music", "recording"]
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".webm", ".opus"}
@@ -44,8 +45,12 @@ def is_silent(clip: np.ndarray) -> bool:
 
 def chop_file(input_path: Path, output_dir: Path, class_name: str) -> list[dict]:
     """
-    חותך קובץ אודיו אחד לחתיכות של 5 שניות.
+    חותך קובץ אודיו אחד לחתיכות של עד 5 שניות.
     מחזיר רשימת רשומות לכתיבה ל-metadata.csv.
+
+    - קבצים ארוכים מ-5 שניות: חתוכים עם חפיפה, פלוס חתיכת זנב אם נשאר חומר לא מסווג.
+    - קבצים קצרים מ-5 שניות (אבל >= MIN_DURATION_SEC): נשמרים כחתיכה בודדת באורך המקורי.
+      (ה-collate_fn יבצע padding ב-batch; ה-attention_mask יבטיח שהמודל מתעלם מה-padding.)
     """
     logger.info(f"קורא: {input_path.name}")
     try:
@@ -56,19 +61,45 @@ def chop_file(input_path: Path, output_dir: Path, class_name: str) -> list[dict]
 
     clip_samples = int(TARGET_SR * CLIP_DURATION_SEC)
     hop_samples = int(TARGET_SR * HOP_DURATION_SEC)
+    min_samples = int(TARGET_SR * MIN_DURATION_SEC)
 
-    if len(audio) < clip_samples:
+    if len(audio) < min_samples:
         duration = len(audio) / TARGET_SR
-        logger.warning(f"  ✗ קצר מ-5 שניות, מדלג ({duration:.2f} שניות)")
+        logger.warning(f"  ✗ קצר מ-{MIN_DURATION_SEC} שניות, מדלג ({duration:.2f} שניות)")
         return []
 
     base_name = input_path.stem
     records: list[dict] = []
-    chunk_idx = 0
     saved = 0
     skipped_silent = 0
 
-    for start in range(0, len(audio) - clip_samples + 1, hop_samples):
+    # קצר מ-5 שניות: שומר את כל האודיו כחתיכה אחת
+    if len(audio) < clip_samples:
+        if is_silent(audio):
+            logger.info(f"  ⏭ אודיו קצר ושקט, מדלג ({len(audio) / TARGET_SR:.2f} שניות)")
+            return []
+        out_name = f"{base_name}_0000.wav"
+        out_path = output_dir / out_name
+        sf.write(str(out_path), audio, TARGET_SR, subtype="PCM_16")
+        records.append({
+            "clip_id": out_name,
+            "source_file": input_path.name,
+            "start_sec": 0.0,
+            "duration_sec": round(len(audio) / TARGET_SR, 3),
+            "class": class_name,
+        })
+        logger.info(f"  ✓ נשמרה חתיכה קצרה ({len(audio) / TARGET_SR:.2f} שניות)")
+        return records
+
+    # אודיו ארוך: חיתוך עם חפיפה
+    starts = list(range(0, len(audio) - clip_samples + 1, hop_samples))
+    # הוספת חתיכת זנב אם יש זנב משמעותי (>= חצי hop) שנשאר לא מסווג
+    last_end = starts[-1] + clip_samples
+    if len(audio) - last_end >= hop_samples // 2:
+        starts.append(len(audio) - clip_samples)
+
+    chunk_idx = 0
+    for start in starts:
         clip = audio[start:start + clip_samples]
 
         if is_silent(clip):
