@@ -107,6 +107,8 @@ def main() -> None:
                         help="מספר אפוקים ללא שיפור ב-macro F1 לפני עצירה מוקדמת")
     parser.add_argument("--num-workers", type=int, default=2,
                         help="מספר תהליכי טעינת נתונים")
+    parser.add_argument("--no-aux-features", action="store_true",
+                        help="להשבית פיצ'רי נשימה (לדיבוג — מאמן רק על wav2vec2)")
     args = parser.parse_args()
 
     # ── הגדרות ראשוניות ────────────────────────────────────────
@@ -159,12 +161,15 @@ def main() -> None:
 
     # ── בניית המודל ──────────────────────────────────────────
     print(f"\nטוען מודל בסיס: {args.base_model}")
+    aux_dim = 0 if args.no_aux_features else NUM_BREATH_FEATURES
+    if args.no_aux_features:
+        print("פיצ'רי נשימה מושבתים (--no-aux-features)")
     model = AudioClassifier(
         base_model=args.base_model,
         num_classes=len(CLASSES),
         freeze_encoder=args.freeze_encoder,
         unfreeze_layers=args.unfreeze_layers,
-        aux_features_dim=NUM_BREATH_FEATURES,
+        aux_features_dim=aux_dim,
     ).to(device)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
