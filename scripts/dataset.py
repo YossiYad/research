@@ -16,6 +16,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from features import extract_breath_features, NUM_BREATH_FEATURES
+
 CLASSES: list[str] = ["human", "ivr", "music", "recording"]
 CLASS_TO_IDX: dict[str, int] = {c: i for i, c in enumerate(CLASSES)}
 IDX_TO_CLASS: dict[int, str] = {i: c for c, i in CLASS_TO_IDX.items()}
@@ -35,46 +37,37 @@ def split_by_source(
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """
     מחלק את המאגר ל-train/val/test לפי קובץ מקור, עם stratification
-    כפול על (class, language).
+    על הקטגוריה (class).
 
     כל החתיכות שנחתכו מאותו קובץ מקור ילכו לאותו פיצול. זה מונע
     דליפת מידע (data leakage) — מצב שבו המודל "מכיר" את ההקלטה
     מאימון וזוכה לציון מנופח על אותה הקלטה ב-test.
-
-    כשמאמנים על מספר שפות, הפיצול נעשה בנפרד לכל (class, language)
-    כך שגם train, גם val וגם test מכילים ייצוג מכל שפה. אחרת,
-    שפה עם מעט הקלטות הייתה נעלמת לחלוטין מ-val/test ולא היינו
-    יכולים למדוד ביצועים עליה.
 
     Returns:
         (train_records, val_records, test_records)
     """
     rng = random.Random(seed)
 
-    by_source: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    by_source: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for rec in metadata:
-        lang = rec.get("language", "unknown") or "unknown"
-        by_source[(rec["class"], lang, rec["source_file"])].append(rec)
+        by_source[(rec["class"], rec["source_file"])].append(rec)
 
-    # קיבוץ קובצי מקור לפי הצמד (קטגוריה, שפה) — זה ה-stratum
-    sources_by_stratum: dict[tuple[str, str], list[tuple[str, list[dict]]]] = defaultdict(list)
-    for (cls, lang, src), recs in by_source.items():
-        sources_by_stratum[(cls, lang)].append((src, recs))
+    # קיבוץ קובצי מקור לפי קטגוריה — זה ה-stratum
+    sources_by_class: dict[str, list[tuple[str, list[dict]]]] = defaultdict(list)
+    for (cls, src), recs in by_source.items():
+        sources_by_class[cls].append((src, recs))
 
     train: list[dict] = []
     val: list[dict] = []
     test: list[dict] = []
 
-    for (cls, lang), sources in sorted(sources_by_stratum.items()):
+    for cls, sources in sorted(sources_by_class.items()):
         rng.shuffle(sources)
         n = len(sources)
         if n == 0:
             continue
         if n < 3:
-            # פחות מ-3 הקלטות מקור ב-stratum — אי אפשר לפצל ל-train/val/test
-            # בלי שאחד מהם יישאר ריק. כל ההקלטות הולכות ל-train, ואנחנו
-            # מזהירים את המשתמש שהקטגוריה+שפה הזו לא תיבדק.
-            print(f"  ⚠ ({cls}, {lang}): רק {n} הקלטות מקור — כולן ל-train (לא ייבדק val/test לשפה הזו)")
+            print(f"  ⚠ {cls}: רק {n} הקלטות מקור — כולן ל-train (לא ייבדק val/test)")
             for _, recs in sources:
                 train.extend(recs)
             continue
@@ -124,7 +117,7 @@ class AudioDataset(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, int]:
         rec = self.records[idx]
         wav_path = self.processed_dir / rec["class"] / rec["clip_id"]
         audio, _ = librosa.load(str(wav_path), sr=self.sample_rate, mono=True)
@@ -133,25 +126,32 @@ class AudioDataset(Dataset):
         if self.augmentor is not None:
             audio = self.augmentor(audio)
 
+        # חילוץ פיצ'רי נשימה (לפני נורמליזציה — צריך את האודיו המקורי)
+        breath_feats = extract_breath_features(audio, sr=self.sample_rate)
+
         # נורמליזציה (חובה ל-wav2vec2 — מצפה לקלט עם ממוצע 0 וסטיית תקן 1)
         if self.normalize:
             audio = (audio - audio.mean()) / (audio.std() + 1e-7)
 
-        return torch.from_numpy(audio).float(), CLASS_TO_IDX[rec["class"]]
+        return (
+            torch.from_numpy(audio).float(),
+            torch.from_numpy(breath_feats).float(),
+            CLASS_TO_IDX[rec["class"]],
+        )
 
 
 def collate_fn(
-    batch: list[tuple[torch.Tensor, int]],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    batch: list[tuple[torch.Tensor, torch.Tensor, int]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Collate עם padding — מיישר את כל החתיכות באורך הארוך ביותר ב-batch.
 
     wav2vec2 מצפה ל-attention_mask כדי להתעלם מאזורי ה-padding.
 
     Returns:
-        (padded_waveforms, attention_mask, labels)
+        (padded_waveforms, attention_mask, breath_features, labels)
     """
-    waveforms, labels = zip(*batch)
+    waveforms, breath_feats, labels = zip(*batch)
     max_len = max(w.shape[0] for w in waveforms)
 
     padded = torch.zeros(len(waveforms), max_len)
@@ -162,7 +162,12 @@ def collate_fn(
         padded[i, :length] = w
         mask[i, :length] = 1
 
-    return padded, mask, torch.tensor(labels, dtype=torch.long)
+    return (
+        padded,
+        mask,
+        torch.stack(breath_feats),
+        torch.tensor(labels, dtype=torch.long),
+    )
 
 
 def class_distribution(records: list[dict]) -> dict[str, int]:
@@ -173,19 +178,3 @@ def class_distribution(records: list[dict]) -> dict[str, int]:
     return dict(counts)
 
 
-def language_distribution(records: list[dict]) -> dict[str, int]:
-    """מחזיר ספירה של דוגמאות לכל שפה."""
-    counts: dict[str, int] = defaultdict(int)
-    for r in records:
-        lang = r.get("language", "unknown") or "unknown"
-        counts[lang] += 1
-    return dict(counts)
-
-
-def class_language_distribution(records: list[dict]) -> dict[tuple[str, str], int]:
-    """מחזיר ספירה לפי הצמד (קטגוריה, שפה)."""
-    counts: dict[tuple[str, str], int] = defaultdict(int)
-    for r in records:
-        lang = r.get("language", "unknown") or "unknown"
-        counts[(r["class"], lang)] += 1
-    return dict(counts)

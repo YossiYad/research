@@ -34,25 +34,50 @@ rcParams["figure.dpi"] = 150
 
 
 def plot_training_curves(history: list[dict], output_dir: Path) -> None:
-    """גרף loss ו-accuracy לאורך האימון."""
+    """גרף loss, accuracy ו-macro F1 לאורך האימון."""
     epochs = [h["epoch"] for h in history]
-    losses = [h["train_loss"] for h in history]
-    accs = [h["val_acc"] for h in history]
+    train_losses = [h["train_loss"] for h in history]
+    val_accs = [h["val_acc"] for h in history]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+    has_val_loss = "val_loss" in history[0]
+    has_f1 = "val_f1" in history[0]
+    n_plots = 2 + has_val_loss + has_f1
 
-    ax1.plot(epochs, losses, "o-", color="#e74c3c", linewidth=2, markersize=4)
-    ax1.set_xlabel("Epoch")
-    ax1.set_ylabel("Train Loss")
-    ax1.set_title("Training Loss")
-    ax1.grid(True, alpha=0.3)
+    fig, axes = plt.subplots(1, n_plots, figsize=(5 * n_plots, 4.5))
+    ax_idx = 0
 
-    ax2.plot(epochs, accs, "o-", color="#2ecc71", linewidth=2, markersize=4)
-    ax2.set_xlabel("Epoch")
-    ax2.set_ylabel("Validation Accuracy")
-    ax2.set_title("Validation Accuracy")
-    ax2.set_ylim(0, 1.05)
-    ax2.grid(True, alpha=0.3)
+    axes[ax_idx].plot(epochs, train_losses, "o-", color="#e74c3c", linewidth=2, markersize=4)
+    axes[ax_idx].set_xlabel("Epoch")
+    axes[ax_idx].set_ylabel("Train Loss")
+    axes[ax_idx].set_title("Training Loss")
+    axes[ax_idx].grid(True, alpha=0.3)
+    ax_idx += 1
+
+    if has_val_loss:
+        val_losses = [h["val_loss"] for h in history]
+        axes[ax_idx].plot(epochs, val_losses, "o-", color="#e67e22", linewidth=2, markersize=4)
+        axes[ax_idx].set_xlabel("Epoch")
+        axes[ax_idx].set_ylabel("Validation Loss")
+        axes[ax_idx].set_title("Validation Loss")
+        axes[ax_idx].grid(True, alpha=0.3)
+        ax_idx += 1
+
+    axes[ax_idx].plot(epochs, val_accs, "o-", color="#2ecc71", linewidth=2, markersize=4)
+    axes[ax_idx].set_xlabel("Epoch")
+    axes[ax_idx].set_ylabel("Validation Accuracy")
+    axes[ax_idx].set_title("Validation Accuracy")
+    axes[ax_idx].set_ylim(0, 1.05)
+    axes[ax_idx].grid(True, alpha=0.3)
+    ax_idx += 1
+
+    if has_f1:
+        val_f1s = [h["val_f1"] for h in history]
+        axes[ax_idx].plot(epochs, val_f1s, "o-", color="#3498db", linewidth=2, markersize=4)
+        axes[ax_idx].set_xlabel("Epoch")
+        axes[ax_idx].set_ylabel("Macro F1")
+        axes[ax_idx].set_title("Validation Macro F1")
+        axes[ax_idx].set_ylim(0, 1.05)
+        axes[ax_idx].grid(True, alpha=0.3)
 
     fig.tight_layout()
     path = output_dir / "training_curves.png"

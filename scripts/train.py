@@ -22,9 +22,9 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -32,37 +32,44 @@ from dataset import (
     CLASSES,
     AudioDataset,
     class_distribution,
-    class_language_distribution,
     collate_fn,
-    language_distribution,
     load_metadata,
     split_by_source,
 )
 from augment import AudioAugmentor
+from features import NUM_BREATH_FEATURES
 from model import AudioClassifier
 
 
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
+    criterion: nn.Module,
     device: str,
-) -> tuple[float, list[int], list[int]]:
-    """מריץ הערכה על מאגר נתונים. מחזיר (דיוק, תוויות אמיתיות, חיזויים)."""
+) -> tuple[float, float, float, list[int], list[int]]:
+    """מריץ הערכה על מאגר נתונים. מחזיר (loss, accuracy, macro_f1, תוויות, חיזויים)."""
     model.eval()
     all_labels: list[int] = []
     all_preds: list[int] = []
+    total_loss = 0.0
+    n_batches = 0
     with torch.no_grad():
-        for audio, mask, labels in loader:
+        for audio, mask, breath_feats, labels in loader:
             audio = audio.to(device)
             mask = mask.to(device)
+            breath_feats = breath_feats.to(device)
             labels = labels.to(device)
-            logits = model(audio, attention_mask=mask)
+            logits = model(audio, attention_mask=mask, aux_features=breath_feats)
+            total_loss += criterion(logits, labels).item()
+            n_batches += 1
             preds = logits.argmax(dim=1)
             all_labels.extend(labels.cpu().tolist())
             all_preds.extend(preds.cpu().tolist())
     correct = sum(1 for t, p in zip(all_labels, all_preds) if t == p)
     accuracy = correct / max(1, len(all_labels))
-    return accuracy, all_labels, all_preds
+    macro_f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    avg_loss = total_loss / max(1, n_batches)
+    return avg_loss, accuracy, macro_f1, all_labels, all_preds
 
 
 def main() -> None:
@@ -77,21 +84,27 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path,
                         default=project_root / "checkpoints",
                         help="תיקיית פלט לשמירת המודלים")
-    parser.add_argument("--base-model", default="facebook/wav2vec2-base",
+    parser.add_argument("--base-model", default="facebook/wav2vec2-xls-r-300m",
                         help="שם המודל המאומן מראש מ-HuggingFace")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4,
-                        help="קצב למידה")
+                        help="קצב למידה לראש הסיווג")
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--test-ratio", type=float, default=0.15)
     parser.add_argument("--freeze-encoder", action="store_true", default=True,
                         help="להקפיא את האנקודר (ברירת מחדל: כן)")
     parser.add_argument("--no-freeze-encoder", dest="freeze_encoder",
                         action="store_false")
+    parser.add_argument("--unfreeze-layers", type=int, default=0,
+                        help="מספר שכבות encoder עליונות לשחרור (0 = הכל קפוא)")
+    parser.add_argument("--encoder-lr", type=float, default=1e-5,
+                        help="קצב למידה לשכבות encoder משוחררות (נמוך מ-lr)")
+    parser.add_argument("--warmup-epochs", type=int, default=2,
+                        help="מספר אפוקי warmup לינארי לפני cosine annealing")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--patience", type=int, default=5,
-                        help="מספר אפוקים ללא שיפור לפני עצירה מוקדמת")
+                        help="מספר אפוקים ללא שיפור ב-macro F1 לפני עצירה מוקדמת")
     parser.add_argument("--num-workers", type=int, default=2,
                         help="מספר תהליכי טעינת נתונים")
     args = parser.parse_args()
@@ -125,14 +138,6 @@ def main() -> None:
     print("התפלגות אימות:", class_distribution(val_recs))
     print("התפלגות בדיקה:", class_distribution(test_recs))
 
-    all_langs = language_distribution(metadata)
-    if len(all_langs) > 1 or next(iter(all_langs), "unknown") != "unknown":
-        print(f"\nשפות במאגר: {all_langs}")
-        print("התפלגות שפה באימון:", language_distribution(train_recs))
-        print("התפלגות שפה באימות:", language_distribution(val_recs))
-        print("התפלגות שפה בבדיקה:", language_distribution(test_recs))
-        print("פירוט (קטגוריה, שפה) בבדיקה:", class_language_distribution(test_recs))
-
     if not train_recs or not val_recs or not test_recs:
         print("\nשגיאה: אחד הפיצולים ריק. צריך לפחות 3 קובצי מקור לכל קטגוריה.")
         sys.exit(1)
@@ -158,18 +163,39 @@ def main() -> None:
         base_model=args.base_model,
         num_classes=len(CLASSES),
         freeze_encoder=args.freeze_encoder,
+        unfreeze_layers=args.unfreeze_layers,
+        aux_features_dim=NUM_BREATH_FEATURES,
     ).to(device)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"פרמטרים מתאמנים: {trainable:,} מתוך {total:,}")
 
-    optimizer = AdamW(
-        [p for p in model.parameters() if p.requires_grad],
-        lr=args.lr,
-        weight_decay=0.01,
-    )
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
+    # קבוצות פרמטרים — LR נמוך יותר לשכבות encoder משוחררות
+    param_groups = []
+    if args.unfreeze_layers > 0:
+        encoder_params = [
+            p for layer in model.encoder.encoder.layers[-args.unfreeze_layers:]
+            for p in layer.parameters() if p.requires_grad
+        ]
+        if encoder_params:
+            param_groups.append({"params": encoder_params, "lr": args.encoder_lr})
+            print(f"שכבות encoder משוחררות: {args.unfreeze_layers} (lr={args.encoder_lr})")
+
+    head_params = [
+        p for n, p in model.named_parameters()
+        if p.requires_grad and not n.startswith("encoder.encoder.layers")
+    ]
+    param_groups.append({"params": head_params, "lr": args.lr})
+
+    optimizer = AdamW(param_groups, weight_decay=0.01)
+
+    # warmup לינארי + cosine annealing
+    warmup = args.warmup_epochs
+    cosine_epochs = max(1, args.epochs - warmup)
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=cosine_epochs)
+    scheduler = SequentialLR(optimizer, [warmup_scheduler, cosine_scheduler], milestones=[warmup])
 
     # class weights — מפצה על חוסר איזון בין הקטגוריות
     train_dist = class_distribution(train_recs)
@@ -182,7 +208,7 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss(weight=weights.to(device))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    best_val_acc = 0.0
+    best_val_f1 = 0.0
     epochs_without_improvement = 0
     history: list[dict] = []
 
@@ -192,12 +218,13 @@ def main() -> None:
         model.train()
         total_loss = 0.0
         n_batches = 0
-        for audio, mask, labels in train_loader:
+        for audio, mask, breath_feats, labels in train_loader:
             audio = audio.to(device)
             mask = mask.to(device)
+            breath_feats = breath_feats.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
-            logits = model(audio, attention_mask=mask)
+            logits = model(audio, attention_mask=mask, aux_features=breath_feats)
             loss = criterion(logits, labels)
             loss.backward()
             optimizer.step()
@@ -206,23 +233,31 @@ def main() -> None:
         scheduler.step()
 
         train_loss = total_loss / max(1, n_batches)
-        val_acc, _, _ = evaluate(model, val_loader, device)
+        val_loss, val_acc, val_f1, _, _ = evaluate(model, val_loader, criterion, device)
 
         print(f"אפוק {epoch:3d}/{args.epochs} | "
               f"train_loss={train_loss:.4f} | "
-              f"val_acc={val_acc:.4f}")
+              f"val_loss={val_loss:.4f} | "
+              f"val_acc={val_acc:.4f} | "
+              f"val_f1={val_f1:.4f}")
 
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_acc": val_acc})
+        history.append({
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "val_f1": val_f1,
+        })
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
             epochs_without_improvement = 0
             torch.save(model.state_dict(), args.output_dir / "best.pt")
-            print(f"    ✓ נשמר best.pt (דיוק חדש: {val_acc:.4f})")
+            print(f"    ✓ נשמר best.pt (macro F1 חדש: {val_f1:.4f})")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= args.patience:
-                print(f"\n⏹ עצירה מוקדמת — אין שיפור כבר {args.patience} אפוקים.")
+                print(f"\n⏹ עצירה מוקדמת — אין שיפור ב-macro F1 כבר {args.patience} אפוקים.")
                 break
 
     torch.save(model.state_dict(), args.output_dir / "last.pt")
@@ -230,12 +265,13 @@ def main() -> None:
         json.dump(history, fh, indent=2, ensure_ascii=False)
 
     # ── בדיקה סופית ────────────────────────────────────────
-    print(f"\nטוען best.pt לבדיקה (דיוק אימות: {best_val_acc:.4f})")
+    print(f"\nטוען best.pt לבדיקה (macro F1 אימות: {best_val_f1:.4f})")
     model.load_state_dict(torch.load(args.output_dir / "best.pt"))
-    test_acc, y_true, y_pred = evaluate(model, test_loader, device)
+    test_loss, test_acc, test_f1, y_true, y_pred = evaluate(model, test_loader, criterion, device)
 
     print(f"\n{'=' * 50}")
     print(f"דיוק על קבוצת הבדיקה: {test_acc:.4f}")
+    print(f"Macro F1 על קבוצת הבדיקה: {test_f1:.4f}")
     print(f"{'=' * 50}\n")
 
     print("דוח סיווג:")
@@ -248,19 +284,6 @@ def main() -> None:
     for cls, row in zip(CLASSES, cm):
         print(f"{cls:>10}  " + "  ".join(f"{v:>10}" for v in row))
 
-    # ── דיוק פר-שפה ─────────────────────────────────────────
-    # ה-test_loader רץ בלי shuffle, ולכן y_pred[i] תואם את test_recs[i].
-    test_langs = sorted(language_distribution(test_recs))
-    if len(test_langs) > 1 or test_langs != ["unknown"]:
-        per_lang_acc: dict[str, tuple[int, int]] = {}
-        for rec, t, p in zip(test_recs, y_true, y_pred):
-            lang = rec.get("language", "unknown") or "unknown"
-            correct, total = per_lang_acc.get(lang, (0, 0))
-            per_lang_acc[lang] = (correct + int(t == p), total + 1)
-        print("\nדיוק על קבוצת הבדיקה פר שפה:")
-        for lang in sorted(per_lang_acc):
-            correct, total = per_lang_acc[lang]
-            print(f"  {lang:>8}: {correct}/{total} = {correct / max(1, total):.4f}")
 
 
 if __name__ == "__main__":
