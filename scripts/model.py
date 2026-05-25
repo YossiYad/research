@@ -6,8 +6,8 @@
 האנקודר כבר יודע להוציא מאפיינים אקוסטיים מועילים, אנחנו רק לומדים
 איך לסווג אותם לארבע הקטגוריות שלנו.
 
-בנוסף ל-wav2vec2, המודל מקבל פיצ'רים אקוסטיים נוספים (כמו זיהוי נשימה)
-שמחוברים לפלט ה-pooling לפני שכבת הסיווג.
+בנוסף ל-wav2vec2, המודל מקבל פיצ'רים אקוסטיים מותאמי-קטגוריה (tempo, DTMF,
+רוחב-פס וכו') שמחוברים לפלט ה-pooling לפני שכבת הסיווג.
 """
 import torch
 import torch.nn as nn
@@ -59,8 +59,8 @@ class AudioClassifier(nn.Module):
         unfreeze_layers: מספר שכבות encoder עליונות לשחרור (0 = הכל קפוא).
             מאפשר fine-tuning חלקי — השכבות העליונות מתאמנות עם LR נמוך יותר.
         dropout: שיעור ה-dropout בשכבת הסיווג, למניעת overfitting.
-        aux_features_dim: מספר פיצ'רים נוספים (כמו זיהוי נשימה) שמחוברים לפלט
-            ה-pooling לפני שכבת הסיווג.
+        aux_features_dim: מספר פיצ'רים אקוסטיים נוספים שמחוברים לפלט
+            ה-pooling לפני שכבת הסיווג (0 = בלי פיצ'רים).
     """
 
     def __init__(
@@ -107,7 +107,7 @@ class AudioClassifier(nn.Module):
         Args:
             input_values: (batch, samples) — אודיו ב-16 קילוהרץ.
             attention_mask: (batch, samples) — מסכה: 1 = אודיו אמיתי, 0 = padding.
-            aux_features: (batch, aux_features_dim) — פיצ'רים נוספים (נשימה וכו').
+            aux_features: (batch, aux_features_dim) — פיצ'רים אקוסטיים נוספים.
 
         Returns:
             logits: (batch, num_classes) — ציוני סיווג לפני softmax.
@@ -130,7 +130,7 @@ class AudioClassifier(nn.Module):
 
         pooled = self.pooling(hidden_states, frame_mask)  # (B, H)
 
-        # חיבור פיצ'רים נוספים (נשימה וכו') לפלט ה-pooling
+        # חיבור פיצ'רים אקוסטיים נוספים לפלט ה-pooling
         if aux_features is not None and self.aux_features_dim > 0:
             pooled = torch.cat([pooled, aux_features], dim=1)  # (B, H + aux)
 

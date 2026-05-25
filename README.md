@@ -50,8 +50,10 @@ audio-classifier/
 │   ├── chop_audio.py         # חיתוך אודיו ארוך לחתיכות של 5 שניות
 │   ├── dataset.py            # טעינה ופיצול train/val/test (stratified)
 │   ├── augment.py            # augmentations אקוסטיות
+│   ├── features.py           # 15 פיצ'רים אקוסטיים מותאמי-קטגוריה
 │   ├── model.py              # ארכיטקטורת המסווג (wav2vec2 + attention pooling)
 │   ├── train.py              # סקריפט אימון
+│   ├── inference.py          # סיווג קובץ/תיקייה חדשים
 │   └── visualize.py          # גרפים ומטריצת בלבול
 ├── notebooks/
 │   └── train_colab.ipynb     # אימון בענן (Google Colab עם GPU)
