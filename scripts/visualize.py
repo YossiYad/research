@@ -16,7 +16,7 @@ from sklearn.metrics import ConfusionMatrixDisplay, classification_report, confu
 
 sys.path.insert(0, str(Path(__file__).parent))
 from dataset import CLASSES, AudioDataset, collate_fn, load_metadata, split_by_source
-from features import NUM_BREATH_FEATURES
+from features import NUM_FEATURES
 from model import AudioClassifier
 
 try:
@@ -199,7 +199,7 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = AudioClassifier(
         num_classes=len(CLASSES),
-        aux_features_dim=NUM_BREATH_FEATURES,
+        aux_features_dim=NUM_FEATURES,
     ).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()

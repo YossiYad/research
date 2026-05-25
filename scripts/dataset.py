@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from features import extract_breath_features, NUM_BREATH_FEATURES
+from features import extract_features, NUM_FEATURES
 
 CLASSES: list[str] = ["human", "ivr", "music", "recording"]
 CLASS_TO_IDX: dict[str, int] = {c: i for i, c in enumerate(CLASSES)}
@@ -107,12 +107,31 @@ class AudioDataset(Dataset):
         sample_rate: int = 16000,
         normalize: bool = True,
         augmentor=None,
+        precompute: bool = True,
     ) -> None:
         self.records = records
         self.processed_dir = Path(processed_dir)
         self.sample_rate = sample_rate
         self.normalize = normalize
         self.augmentor = augmentor
+        # מטמון פיצ'רים — נחשבים על האודיו המקורי (לא המאוגמן) פעם אחת
+        # ונשמרים, כי החישוב כבד (pyin/beat/hpss) ומריץ אותו כל אפוק היה
+        # מאט מאוד. המפתח (class, clip_id) כי clip_id לא ייחודי בין קטגוריות.
+        self._feat_cache: dict[tuple[str, str], np.ndarray] = {}
+        if precompute:
+            self._precompute_features()
+
+    def _precompute_features(self) -> None:
+        total = len(self.records)
+        for i, rec in enumerate(self.records, 1):
+            key = (rec["class"], rec["clip_id"])
+            if key in self._feat_cache:
+                continue
+            wav_path = self.processed_dir / rec["class"] / rec["clip_id"]
+            audio, _ = librosa.load(str(wav_path), sr=self.sample_rate, mono=True)
+            self._feat_cache[key] = extract_features(audio, sr=self.sample_rate)
+            if i % 50 == 0 or i == total:
+                print(f"  חילוץ פיצ'רים: {i}/{total}")
 
     def __len__(self) -> int:
         return len(self.records)
@@ -122,12 +141,16 @@ class AudioDataset(Dataset):
         wav_path = self.processed_dir / rec["class"] / rec["clip_id"]
         audio, _ = librosa.load(str(wav_path), sr=self.sample_rate, mono=True)
 
-        # augmentations (רק בזמן אימון)
+        # פיצ'רים — מהמטמון אם קיים, אחרת חישוב על האודיו המקורי
+        key = (rec["class"], rec["clip_id"])
+        feats = self._feat_cache.get(key)
+        if feats is None:
+            feats = extract_features(audio, sr=self.sample_rate)
+            self._feat_cache[key] = feats
+
+        # augmentations (רק בזמן אימון) — על ה-waveform בלבד, אחרי הפיצ'רים
         if self.augmentor is not None:
             audio = self.augmentor(audio)
-
-        # חילוץ פיצ'רי נשימה (לפני נורמליזציה — צריך את האודיו המקורי)
-        breath_feats = extract_breath_features(audio, sr=self.sample_rate)
 
         # נורמליזציה (חובה ל-wav2vec2 — מצפה לקלט עם ממוצע 0 וסטיית תקן 1)
         if self.normalize:
@@ -135,7 +158,7 @@ class AudioDataset(Dataset):
 
         return (
             torch.from_numpy(audio).float(),
-            torch.from_numpy(breath_feats).float(),
+            torch.from_numpy(feats).float(),
             CLASS_TO_IDX[rec["class"]],
         )
 

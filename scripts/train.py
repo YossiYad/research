@@ -37,7 +37,7 @@ from dataset import (
     split_by_source,
 )
 from augment import AudioAugmentor
-from features import NUM_BREATH_FEATURES
+from features import NUM_FEATURES
 from model import AudioClassifier
 
 
@@ -161,7 +161,7 @@ def main() -> None:
 
     # ── בניית המודל ──────────────────────────────────────────
     print(f"\nטוען מודל בסיס: {args.base_model}")
-    aux_dim = 0 if args.no_aux_features else NUM_BREATH_FEATURES
+    aux_dim = 0 if args.no_aux_features else NUM_FEATURES
     if args.no_aux_features:
         print("פיצ'רי נשימה מושבתים (--no-aux-features)")
     model = AudioClassifier(

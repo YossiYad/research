@@ -16,7 +16,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent))
 from dataset import CLASSES, IDX_TO_CLASS
-from features import extract_breath_features, NUM_BREATH_FEATURES
+from features import extract_features, NUM_FEATURES
 from model import AudioClassifier
 
 
@@ -51,16 +51,16 @@ def classify_chunks(
 
     with torch.no_grad():
         for chunk in chunks:
-            # חילוץ פיצ'רי נשימה (לפני נורמליזציה)
-            breath_feats = extract_breath_features(chunk, sr=SAMPLE_RATE)
-            breath_tensor = torch.from_numpy(breath_feats).float().unsqueeze(0).to(device)
+            # חילוץ פיצ'רים אקוסטיים (לפני נורמליזציה)
+            feats = extract_features(chunk, sr=SAMPLE_RATE)
+            feats_tensor = torch.from_numpy(feats).float().unsqueeze(0).to(device)
 
             # נורמליזציה (כמו ב-dataset.py)
             audio = (chunk - chunk.mean()) / (chunk.std() + 1e-7)
             waveform = torch.from_numpy(audio).float().unsqueeze(0).to(device)
             mask = torch.ones(1, waveform.shape[1], dtype=torch.long, device=device)
 
-            logits = model(waveform, attention_mask=mask, aux_features=breath_tensor)
+            logits = model(waveform, attention_mask=mask, aux_features=feats_tensor)
             probs = torch.softmax(logits, dim=1)
             all_probs.append(probs.cpu().numpy()[0])
 
@@ -97,7 +97,7 @@ def main() -> None:
     model = AudioClassifier(
         base_model=args.base_model,
         num_classes=len(CLASSES),
-        aux_features_dim=NUM_BREATH_FEATURES,
+        aux_features_dim=NUM_FEATURES,
     ).to(device)
     model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     print(f"נטען checkpoint: {args.checkpoint}")
