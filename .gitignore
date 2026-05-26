@@ -22,3 +22,6 @@ venv/
 checkpoints/
 runs/
 logs/
+
+# קובץ HTML ביניים שנוצר בהמרת הדו"ח (מתחדש מ-REPORT.md)
+REPORT.html
