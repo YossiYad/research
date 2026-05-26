@@ -68,6 +68,17 @@ Linear(1024+15, 128) → GELU → Dropout(0.2) → Linear(128, 4)
 - Augmentations (רעש, time-stretch, pitch-shift, gain) על קבוצת האימון בלבד.
 - Early stopping מבוסס macro F1 על קבוצת האימות.
 
+### רכיבי הצינור (הסבר לדיאגרמה)
+
+1. **Google Drive — raw audio** — מקור הדאטה. קבצי אודיו גולמיים בכל פורמט (mp3/wav/m4a/mp4), מאורגנים בתת-תיקיות לפי קטגוריה (`human/`, `ivr/`, `music/`, `recording/`).
+2. **`chop_audio.py`** — חותך כל קובץ לחתיכות של 5 שניות (16kHz, mono, PCM16), שומר קליפים קצרים (≥0.3 שניות) במקום לדלג עליהם, מדלג על קטעים שקטים, וכותב `metadata.csv`.
+3. **`dataset.py`** — טוען את ה-metadata ומפצל ל-train/val/test **לפי הקלטת מקור** (למניעת דליפת מידע) עם stratification על הקטגוריה.
+4. **`augment.py`** — אוגמנטציות אקוסטיות (רעש, מתיחת זמן, pitch-shift, gain) על קבוצת האימון בלבד, להגדלת הגיוון.
+5. **`features.py`** — מחשב 17 פיצ'רים אקוסטיים לכל קליפ, **פעם אחת** (על האודיו המקורי) ושומר במטמון, כי החישוב כבד מכדי לחזור עליו בכל אפוק.
+6. **`model.py` — AudioClassifier** — ה-encoder של wav2vec2 (קפוא) מוציא ייצוג לכל פריים; **Attention Pooling** מאגד אותו לווקטור יחיד (1024-d); מחברים את 17 הפיצ'רים; ושכבת סיווג (Linear→GELU→Dropout→Linear) מפיקה 4 logits.
+7. **`train.py`** — לולאת האימון: CrossEntropy עם class weights, אופטימייזר AdamW, לוח LR של warmup+cosine, ו-early stopping לפי macro F1. שומר `best.pt` ו-`run_config.json`.
+8. **הערכה ודיווח** — `visualize.py` מפיק גרפי אימון ומטריצת בלבול; `compare_runs.py` בונה טבלת השוואה של כל הריצות (`comparison.csv`).
+
 ## 4. הפיצ'רים האקוסטיים (Feature Engineering)
 
 17 פיצ'רים, כל אחד מכוון להבחנה של קטגוריה ומבוסס על אלגוריתם מקובל (librosa). כולם מנורמלים לסקלה פיזית קבועה ונחתכים לטווח `[-5, 5]`.
