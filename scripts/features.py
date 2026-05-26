@@ -18,7 +18,8 @@
     music:     tempo_bpm, beat_strength, harmonic_ratio, chroma_std
     ivr:       dtmf_energy, pitch_stability, silence_ratio, pitch_jitter, amp_shimmer
     human:     pitch_range, breath_events, voiced_ratio
-    recording: bandwidth_hz, rolloff_hz, noise_floor_db
+    recording: bandwidth_hz, rolloff_hz, noise_floor_db,
+               noise_stationarity, spectral_tilt, dynamic_range_db
     כללי:      zcr_mean, spectral_centroid_hz
 """
 import warnings
@@ -42,6 +43,9 @@ FEATURE_NAMES = [
     "bandwidth_hz",         # recording — רוחב פס אפקטיבי (rolloff 99%)
     "rolloff_hz",           # recording — תדר גלגלת 85%
     "noise_floor_db",       # recording — רצפת רעש (dB)
+    "noise_stationarity",   # recording — יציבות רעש הרקע (ערוץ)
+    "spectral_tilt",        # recording — שיפוע ספקטרלי (חתימת codec)
+    "dynamic_range_db",     # recording — טווח דינמי (reverb/דחיסה)
     "zcr_mean",             # כללי — קצב חציית אפס
     "spectral_centroid_hz", # כללי — מרכז כובד ספקטרלי
 ]
@@ -67,6 +71,9 @@ _NORM_SCALES = np.array([
     4000.0,   # bandwidth_hz
     4000.0,   # rolloff_hz
     40.0,     # noise_floor_db (שלילי)
+    1.0,      # noise_stationarity (CV)
+    5.0,      # spectral_tilt (dB/kHz)
+    30.0,     # dynamic_range_db
     0.2,      # zcr_mean
     2000.0,   # spectral_centroid_hz
 ], dtype=np.float32)
@@ -195,6 +202,25 @@ def extract_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     noise_floor = float(np.percentile(rms, 10))
     noise_floor_db = float(20 * np.log10(noise_floor + 1e-7))
 
+    # יציבות רעש רקע — סטיית תקן יחסית בפריימים החלשים. הקלטה/תא-קולי:
+    # רעש קבוע (CV נמוך); שיחה חיה: רעש משתנה (CV גבוה).
+    noise_thr = float(np.percentile(rms, 30))
+    noise_frames = rms[rms <= noise_thr]
+    if noise_frames.size > 2:
+        noise_stationarity = float(np.std(noise_frames) / (np.mean(noise_frames) + 1e-9))
+    else:
+        noise_stationarity = 0.0
+
+    # שיפוע ספקטרלי (dB/kHz) — חתימת ערוץ/codec. דחיסת קו-טלפון → tilt תלול.
+    spectrum_db = librosa.amplitude_to_db(np.mean(S, axis=1) + 1e-9)
+    spectral_tilt = float(np.polyfit(freqs / 1000.0, spectrum_db, 1)[0])
+
+    # טווח דינמי (dB) — יחס פריימים חזקים/חלשים. שיחה חיה: טווח רחב (שתיקות עמוקות);
+    # הקלטה/reverb: טווח צר (הד/רעש ממלאים את השתיקות).
+    loud = float(np.percentile(rms, 95))
+    quiet = float(np.percentile(rms, 5))
+    dynamic_range_db = float(20 * np.log10((loud + 1e-9) / (quiet + 1e-9)))
+
     # ── כללי ─────────────────────────────────────────────────
     zcr = librosa.feature.zero_crossing_rate(audio, frame_length=n_fft, hop_length=hop)[0]
     zcr_mean = float(np.mean(zcr)) if zcr.size else 0.0
@@ -206,6 +232,7 @@ def extract_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
         dtmf_energy, pitch_stability, silence_ratio, pitch_jitter, amp_shimmer,
         pitch_range, breath_events, voiced_ratio,
         bandwidth_hz, rolloff_hz, noise_floor_db,
+        noise_stationarity, spectral_tilt, dynamic_range_db,
         zcr_mean, spectral_centroid_hz,
     ], dtype=np.float32)
 
