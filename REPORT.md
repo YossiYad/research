@@ -45,6 +45,10 @@
 
 ## 3. ארכיטקטורת המודל
 
+![ארכיטקטורת המודל](docs/model_architecture.png)
+
+> הדיאגרמה נוצרת מחדש עם `python scripts/plot_architecture.py`.
+
 ```
 אודיו גולמי (16kHz, mono)
       ↓
