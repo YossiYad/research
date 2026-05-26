@@ -28,7 +28,7 @@ HOP_DURATION_SEC = 2.5         # קפיצה: 2.5 שניות (חפיפה של 50%
 MIN_DURATION_SEC = 0.3         # אורך מינימלי שיישמר (קצר מזה הוא רעש/קליק)
 SILENCE_THRESHOLD_DB = -45     # סף שתיקה — חתיכות שקטות יותר ידולגו
 VALID_CLASSES = ["human", "ivr", "music", "recording"]
-AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".webm", ".opus"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".mp4", ".flac", ".ogg", ".aac", ".webm", ".opus"}
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(message)s")
