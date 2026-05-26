@@ -109,7 +109,9 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=2,
                         help="מספר תהליכי טעינת נתונים")
     parser.add_argument("--no-aux-features", action="store_true",
-                        help="להשבית פיצ'רי נשימה (לדיבוג — מאמן רק על wav2vec2)")
+                        help="להשבית פיצ'רים אקוסטיים (מאמן רק על wav2vec2)")
+    parser.add_argument("--balanced-sampler", action="store_true",
+                        help="דגימה מאוזנת של הקטגוריות (במקום class weights ב-loss)")
     args = parser.parse_args()
 
     # ── הגדרות ראשוניות ────────────────────────────────────────
@@ -150,9 +152,22 @@ def main() -> None:
     val_ds = AudioDataset(val_recs, args.data_dir)
     test_ds = AudioDataset(test_recs, args.data_dir)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=(device == "cuda"),
-                              collate_fn=collate_fn)
+    if args.balanced_sampler:
+        # דגימה מאוזנת — משכפל קטגוריות קטנות (recording/ivr) כך שכל batch מאוזן.
+        # מחליף את ה-shuffle; כשהוא פעיל נשתמש ב-loss לא משוקלל (אחרת איזון כפול).
+        from torch.utils.data import WeightedRandomSampler
+        counts = class_distribution(train_recs)
+        sample_weights = [1.0 / counts[r["class"]] for r in train_recs]
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights),
+                                        replacement=True)
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,
+                                  num_workers=args.num_workers, pin_memory=(device == "cuda"),
+                                  collate_fn=collate_fn)
+        print("דגימה מאוזנת מופעלת (--balanced-sampler)")
+    else:
+        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
+                                  num_workers=args.num_workers, pin_memory=(device == "cuda"),
+                                  collate_fn=collate_fn)
     val_loader = DataLoader(val_ds, batch_size=args.batch_size,
                             num_workers=args.num_workers, pin_memory=(device == "cuda"),
                             collate_fn=collate_fn)
@@ -210,8 +225,13 @@ def main() -> None:
         dtype=torch.float,
     )
     weights = weights / weights.sum() * len(CLASSES)  # נרמול כך שהממוצע = 1
-    print(f"\nclass weights: {dict(zip(CLASSES, weights.tolist()))}")
-    criterion = nn.CrossEntropyLoss(weight=weights.to(device))
+    if args.balanced_sampler:
+        # האיזון כבר נעשה ברמת הדגימה — loss לא משוקלל למניעת איזון כפול
+        print("\nloss לא משוקלל (האיזון נעשה ע\"י ה-sampler)")
+        criterion = nn.CrossEntropyLoss()
+    else:
+        print(f"\nclass weights: {dict(zip(CLASSES, weights.tolist()))}")
+        criterion = nn.CrossEntropyLoss(weight=weights.to(device))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     best_val_f1 = 0.0
@@ -309,6 +329,7 @@ def main() -> None:
             "patience": args.patience,
             "aux_features": not args.no_aux_features,
             "num_aux_features": aux_dim,
+            "balanced_sampler": args.balanced_sampler,
             "val_ratio": args.val_ratio,
             "test_ratio": args.test_ratio,
             "seed": args.seed,
