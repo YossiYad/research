@@ -103,7 +103,7 @@ def main() -> None:
     print(f"נטען checkpoint: {args.checkpoint}")
 
     # איסוף קבצים לסיווג
-    audio_exts = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".webm", ".opus"}
+    audio_exts = {".wav", ".mp3", ".flac", ".m4a", ".mp4", ".ogg", ".aac", ".webm", ".opus"}
     if args.input.is_dir():
         files = sorted(f for f in args.input.iterdir() if f.suffix.lower() in audio_exts)
     elif args.input.is_file():
