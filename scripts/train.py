@@ -17,6 +17,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -288,6 +289,57 @@ def main() -> None:
     print(header)
     for cls, row in zip(CLASSES, cm):
         print(f"{cls:>10}  " + "  ".join(f"{v:>10}" for v in row))
+
+    # ── שמירת תיעוד ריצה (הגדרות + תוצאות) ──────────────────
+    # קובץ זה מתעד את עצמו — מאפשר להשוות בין ריצות בלי לזכור מה היה בכל אחת.
+    report = classification_report(
+        y_true, y_pred, target_names=CLASSES, output_dict=True, zero_division=0,
+    )
+    run_info = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "config": {
+            "base_model": args.base_model,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "lr": args.lr,
+            "freeze_encoder": args.freeze_encoder,
+            "unfreeze_layers": args.unfreeze_layers,
+            "encoder_lr": args.encoder_lr,
+            "warmup_epochs": args.warmup_epochs,
+            "patience": args.patience,
+            "aux_features": not args.no_aux_features,
+            "num_aux_features": aux_dim,
+            "val_ratio": args.val_ratio,
+            "test_ratio": args.test_ratio,
+            "seed": args.seed,
+        },
+        "dataset": {
+            "total_clips": len(metadata),
+            "distribution": class_distribution(metadata),
+            "train": class_distribution(train_recs),
+            "val": class_distribution(val_recs),
+            "test": class_distribution(test_recs),
+        },
+        "results": {
+            "best_val_macro_f1": round(best_val_f1, 4),
+            "test_accuracy": round(test_acc, 4),
+            "test_macro_f1": round(test_f1, 4),
+            "per_class": {
+                c: {
+                    "precision": round(report[c]["precision"], 4),
+                    "recall": round(report[c]["recall"], 4),
+                    "f1": round(report[c]["f1-score"], 4),
+                    "support": int(report[c]["support"]),
+                }
+                for c in CLASSES
+            },
+            "confusion_matrix": cm.tolist(),
+            "epochs_trained": len(history),
+        },
+    }
+    with (args.output_dir / "run_config.json").open("w", encoding="utf-8") as fh:
+        json.dump(run_info, fh, indent=2, ensure_ascii=False)
+    print(f"\n✓ נשמר run_config.json (הגדרות + תוצאות) ב-{args.output_dir}")
 
 
 
