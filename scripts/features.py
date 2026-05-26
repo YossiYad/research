@@ -16,7 +16,7 @@
 
 רשימת הפיצ'רים (15):
     music:     tempo_bpm, beat_strength, harmonic_ratio, chroma_std
-    ivr:       dtmf_energy, pitch_stability, silence_ratio
+    ivr:       dtmf_energy, pitch_stability, silence_ratio, pitch_jitter, amp_shimmer
     human:     pitch_range, breath_events, voiced_ratio
     recording: bandwidth_hz, rolloff_hz, noise_floor_db
     כללי:      zcr_mean, spectral_centroid_hz
@@ -34,6 +34,8 @@ FEATURE_NAMES = [
     "dtmf_energy",          # ivr   — אנרגיית צלילי חיוג (DTMF)
     "pitch_stability",      # ivr   — יציבות pitch (קול סינתטי)
     "silence_ratio",        # ivr   — יחס פריימים שקטים
+    "pitch_jitter",         # ivr   — הפרעת F0 מחזורית (סינתטי = נמוך)
+    "amp_shimmer",          # ivr   — הפרעת עוצמה מחזורית (סינתטי = נמוך)
     "pitch_range",          # human — טווח pitch דינמי
     "breath_events",        # human — ספירת אירועי נשימה
     "voiced_ratio",         # human — יחס פריימים קוליים
@@ -57,6 +59,8 @@ _NORM_SCALES = np.array([
     0.5,      # dtmf_energy (max ratio לפריים)
     1.0,      # pitch_stability (0-1)
     1.0,      # silence_ratio (0-1)
+    0.05,     # pitch_jitter (הפרעה יחסית)
+    0.1,      # amp_shimmer (הפרעה יחסית)
     150.0,    # pitch_range (Hz)
     5.0,      # breath_events
     1.0,      # voiced_ratio (0-1)
@@ -146,6 +150,22 @@ def extract_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
     silence_thr = float(np.max(rms)) * 0.1
     silence_ratio = float(np.mean(rms < silence_thr))
 
+    # jitter — הפרעת F0 בין פריימים קוליים. קול סינתטי (IVR) "חלק" → jitter נמוך;
+    # קול אנושי טבעי → jitter גבוה. מבדיל בין IVR ל-human (ששניהם דיבור).
+    if f0_valid.size > 2:
+        pitch_jitter = float(np.mean(np.abs(np.diff(f0_valid))) / (np.mean(f0_valid) + 1e-9))
+    else:
+        pitch_jitter = 0.0
+
+    # shimmer — הפרעת עוצמה בין פריימים קוליים. אותו רציונל כמו jitter.
+    nv = min(len(rms), len(voiced_flag))
+    vmask = np.asarray(voiced_flag[:nv], dtype=bool) if nv > 0 else np.array([], dtype=bool)
+    voiced_amp = rms[:nv][vmask] if vmask.size else np.array([])
+    if voiced_amp.size > 2:
+        amp_shimmer = float(np.mean(np.abs(np.diff(voiced_amp))) / (np.mean(voiced_amp) + 1e-9))
+    else:
+        amp_shimmer = 0.0
+
     # ── human ────────────────────────────────────────────────
     # אירועי נשימה — רצפים של אנרגיה נמוכה + flatness גבוה (רעש רחב-פס)
     flatness = librosa.feature.spectral_flatness(S=S, n_fft=n_fft, hop_length=hop)[0]
@@ -183,7 +203,7 @@ def extract_features(audio: np.ndarray, sr: int = 16000) -> np.ndarray:
 
     features = np.array([
         tempo_bpm, beat_strength, harmonic_ratio, chroma_std,
-        dtmf_energy, pitch_stability, silence_ratio,
+        dtmf_energy, pitch_stability, silence_ratio, pitch_jitter, amp_shimmer,
         pitch_range, breath_events, voiced_ratio,
         bandwidth_hz, rolloff_hz, noise_floor_db,
         zcr_mean, spectral_centroid_hz,
