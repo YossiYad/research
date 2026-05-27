@@ -73,7 +73,6 @@
     </div>
 
     <audio id="player" class="hidden" controls></audio>
-    <button class="btn hidden" id="go">סווג את ההקלטה</button>
 
     <div class="loading hidden" id="loading">
       <div class="spin"></div>
@@ -95,7 +94,7 @@ const CATS = {
   recording: {he:"הקלטה / תא קולי",    emoji:"📼", color:"var(--recording)"},
 };
 const $ = id => document.getElementById(id);
-const drop=$("drop"), fileInput=$("file"), player=$("player"), go=$("go"),
+const drop=$("drop"), fileInput=$("file"), player=$("player"),
       loading=$("loading"), result=$("result"), err=$("err");
 let chosen=null;
 
@@ -108,14 +107,15 @@ fileInput.onchange=e=>{if(e.target.files[0])pick(e.target.files[0])};
 function pick(f){
   chosen=f;
   player.src=URL.createObjectURL(f); player.classList.remove("hidden");
-  go.classList.remove("hidden"); result.classList.add("hidden"); err.classList.add("hidden");
+  result.classList.add("hidden"); err.classList.add("hidden");
   drop.querySelector("h3").textContent=f.name;
+  classify();   // מיד אחרי הגרירה — מסווג אוטומטית
 }
 
-go.onclick=async()=>{
+async function classify(){
   if(!chosen)return;
   loading.classList.remove("hidden"); result.classList.add("hidden");
-  err.classList.add("hidden"); go.disabled=true;
+  err.classList.add("hidden");
   try{
     const fd=new FormData(); fd.append("file",chosen);
     const res=await fetch("predict",{method:"POST",body:fd});
@@ -125,9 +125,9 @@ go.onclick=async()=>{
     err.textContent="שגיאה: "+e.message+" — ודא שהשרת רץ.";
     err.classList.remove("hidden");
   }finally{
-    loading.classList.add("hidden"); go.disabled=false;
+    loading.classList.add("hidden");
   }
-};
+}
 
 function render(data){
   const probs=data.probabilities||{};
