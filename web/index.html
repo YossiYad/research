@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Holdie — מסווג אודיו של שיחות טלפון</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg1:#0f172a; --bg2:#4c1d95; --card:rgba(255,255,255,.06);
+    --line:rgba(255,255,255,.14); --txt:#e8edf5; --muted:#9aa6b8; --accent:#8b5cf6;
+    --human:#3b82f6; --ivr:#10b981; --music:#f59e0b; --recording:#ec4899; --win:#22c55e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:'Heebo',system-ui,sans-serif; color:var(--txt); min-height:100vh;
+    background:radial-gradient(1200px 600px at 80% -10%,#5b21b6 0,transparent 55%),
+               linear-gradient(160deg,var(--bg1),#1e1b4b 60%,#2e1065);
+    display:flex; align-items:flex-start; justify-content:center; padding:32px 16px;
+  }
+  .wrap{width:100%; max-width:680px}
+  header{text-align:center; margin-bottom:24px}
+  header .logo{display:inline-flex; align-items:center; gap:10px; font-weight:800; font-size:30px; letter-spacing:.5px}
+  header .logo .dot{width:14px;height:14px;border-radius:50%;background:var(--accent);box-shadow:0 0 18px var(--accent)}
+  header p{color:var(--muted); margin-top:6px; font-weight:300}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:20px;
+        padding:26px; backdrop-filter:blur(12px); box-shadow:0 24px 60px rgba(0,0,0,.35)}
+  .drop{border:2px dashed var(--line); border-radius:16px; padding:34px 20px; text-align:center;
+        cursor:pointer; transition:.18s; background:rgba(255,255,255,.02)}
+  .drop:hover,.drop.over{border-color:var(--accent); background:rgba(139,92,246,.10)}
+  .drop .ico{font-size:40px}
+  .drop h3{margin:10px 0 4px; font-weight:600}
+  .drop small{color:var(--muted)}
+  audio{width:100%; margin-top:18px; border-radius:10px}
+  .btn{display:block; width:100%; margin-top:18px; padding:14px; border:0; border-radius:12px;
+       font-family:inherit; font-size:17px; font-weight:600; color:#fff; cursor:pointer;
+       background:linear-gradient(135deg,#7c3aed,#6366f1); transition:.15s}
+  .btn:hover{filter:brightness(1.08)} .btn:disabled{opacity:.5; cursor:not-allowed}
+  .hidden{display:none}
+  .spin{width:34px;height:34px;border:4px solid var(--line);border-top-color:var(--accent);
+        border-radius:50%;animation:r 1s linear infinite;margin:8px auto}
+  @keyframes r{to{transform:rotate(360deg)}}
+  .loading{text-align:center;color:var(--muted);padding:20px}
+  .result{margin-top:22px}
+  .winner{display:flex; align-items:center; gap:14px; padding:16px; border-radius:14px;
+          background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.4); margin-bottom:18px}
+  .winner .emoji{font-size:42px}
+  .winner .meta{flex:1}
+  .winner .meta .lbl{font-size:22px;font-weight:800}
+  .winner .meta .sub{color:var(--muted);font-size:14px}
+  .winner .conf{font-size:30px;font-weight:800;color:var(--win)}
+  .bar{margin:12px 0}
+  .bar .row{display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px}
+  .bar .track{height:12px;border-radius:8px;background:rgba(255,255,255,.08);overflow:hidden}
+  .bar .fill{height:100%;width:0;border-radius:8px;transition:width .8s cubic-bezier(.2,.8,.2,1)}
+  footer{text-align:center;color:var(--muted);font-size:12px;margin-top:18px;font-weight:300}
+  .err{color:#fca5a5;text-align:center;padding:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><span class="dot"></span>Holdie</div>
+    <p>מסווג אודיו של שיחות טלפון — wav2vec2 + הנדסת פיצ'רים</p>
+  </header>
+
+  <div class="card">
+    <div class="drop" id="drop">
+      <div class="ico">🎧</div>
+      <h3>גרור לכאן קובץ אודיו או לחץ לבחירה</h3>
+      <small>wav · mp3 · m4a · mp4 · ogg</small>
+      <input type="file" id="file" accept="audio/*,.mp4,.m4a,.ogg,.wav,.mp3" class="hidden">
+    </div>
+
+    <audio id="player" class="hidden" controls></audio>
+    <button class="btn hidden" id="go">סווג את ההקלטה</button>
+
+    <div class="loading hidden" id="loading">
+      <div class="spin"></div>
+      מנתח את האודיו ומריץ את המודל…
+    </div>
+
+    <div class="result hidden" id="result"></div>
+    <div class="err hidden" id="err"></div>
+  </div>
+
+  <footer>הקטגוריות: נציג אנושי · תפריט IVR · מוזיקת המתנה · הקלטה / תא קולי</footer>
+</div>
+
+<script>
+const CATS = {
+  human:     {he:"נציג אנושי",        emoji:"🧑", color:"var(--human)"},
+  ivr:       {he:"תפריט IVR",          emoji:"🤖", color:"var(--ivr)"},
+  music:     {he:"מוזיקת המתנה",       emoji:"🎵", color:"var(--music)"},
+  recording: {he:"הקלטה / תא קולי",    emoji:"📼", color:"var(--recording)"},
+};
+const $ = id => document.getElementById(id);
+const drop=$("drop"), fileInput=$("file"), player=$("player"), go=$("go"),
+      loading=$("loading"), result=$("result"), err=$("err");
+let chosen=null;
+
+drop.onclick=()=>fileInput.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add("over")};
+drop.ondragleave=()=>drop.classList.remove("over");
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");if(e.dataTransfer.files[0])pick(e.dataTransfer.files[0])};
+fileInput.onchange=e=>{if(e.target.files[0])pick(e.target.files[0])};
+
+function pick(f){
+  chosen=f;
+  player.src=URL.createObjectURL(f); player.classList.remove("hidden");
+  go.classList.remove("hidden"); result.classList.add("hidden"); err.classList.add("hidden");
+  drop.querySelector("h3").textContent=f.name;
+}
+
+go.onclick=async()=>{
+  if(!chosen)return;
+  loading.classList.remove("hidden"); result.classList.add("hidden");
+  err.classList.add("hidden"); go.disabled=true;
+  try{
+    const fd=new FormData(); fd.append("file",chosen);
+    const res=await fetch("predict",{method:"POST",body:fd});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    render(await res.json());
+  }catch(e){
+    err.textContent="שגיאה: "+e.message+" — ודא שהשרת רץ.";
+    err.classList.remove("hidden");
+  }finally{
+    loading.classList.add("hidden"); go.disabled=false;
+  }
+};
+
+function render(data){
+  const probs=data.probabilities||{};
+  const sorted=Object.entries(probs).sort((a,b)=>b[1]-a[1]);
+  const top=sorted[0], info=CATS[top[0]]||{he:top[0],emoji:"❓",color:"var(--accent)"};
+  let html=`<div class="winner">
+      <div class="emoji">${info.emoji}</div>
+      <div class="meta"><div class="lbl">${info.he}</div>
+        <div class="sub">נותחו ${data.num_chunks} מקטעים</div></div>
+      <div class="conf">${Math.round(top[1]*100)}%</div>
+    </div>`;
+  for(const [k,v] of sorted){
+    const c=CATS[k]||{he:k,color:"var(--accent)"};
+    html+=`<div class="bar"><div class="row"><span>${c.emoji||""} ${c.he}</span>
+      <span>${(v*100).toFixed(1)}%</span></div>
+      <div class="track"><div class="fill" data-w="${v*100}" style="background:${c.color}"></div></div></div>`;
+  }
+  result.innerHTML=html; result.classList.remove("hidden");
+  requestAnimationFrame(()=>result.querySelectorAll(".fill").forEach(f=>f.style.width=f.dataset.w+"%"));
+}
+</script>
+</body>
+</html>
